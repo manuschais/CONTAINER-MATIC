@@ -1264,16 +1264,55 @@ function BoxScene({ container, boxes, selectedId, onMoveBox, onSelectBox }) {
       updateCam();
     };
 
+    const findFreePos = (bId, nx, ny) => {
+      const { boxes: bxs, container: cnt } = stateRef.current;
+      const b = bxs.find(x => x.id === bId); if(!b) return { x: nx, y: ny };
+      const others = bxs.filter(x => x.id !== bId);
+      const overlaps = (ax, ay) => others.some(o =>
+        ax < o.x+o.length && ax+b.length > o.x && ay < o.y+o.width && ay+b.width > o.y
+      );
+      if(!overlaps(nx, ny)) return { x: nx, y: ny };
+      // Spiral search for free spot
+      const step = Math.max(b.length, b.width, 200);
+      for(let r=1; r<30; r++) {
+        for(let dx=-r; dx<=r; dx++) for(let dy=-r; dy<=r; dy++) {
+          if(Math.abs(dx)!==r && Math.abs(dy)!==r) continue;
+          const tx = Math.max(0, Math.min(cnt.innerLength-b.length, nx+dx*step));
+          const ty = Math.max(0, Math.min(cnt.innerWidth-b.width, ny+dy*step));
+          if(!overlaps(tx, ty)) return { x: tx, y: ty };
+        }
+      }
+      return { x: nx, y: ny };
+    };
+
     const onUp = () => {
       if(isDraggingBox && dragBoxId) {
-        stateRef.current.onMoveBox?.(dragBoxId, dragNewX, dragNewY);
+        const free = findFreePos(dragBoxId, dragNewX, dragNewY);
+        stateRef.current.onMoveBox?.(dragBoxId, free.x, free.y);
       }
       isDraggingBox = false; dragBoxId = null; isOrbit = false;
       renderer.domElement.style.cursor = "grab";
     };
 
     const onWheel = (e) => {
-      radius = Math.max(4000, Math.min(45000, radius + e.deltaY * 12));
+      e.preventDefault();
+      if(e.ctrlKey) {
+        // Ctrl+scroll = pan up/down
+        const panSpeed = radius / mount.clientHeight;
+        target.y -= e.deltaY * panSpeed * 0.5;
+      } else {
+        radius = Math.max(4000, Math.min(45000, radius + e.deltaY * 12));
+      }
+      updateCam();
+    };
+
+    const onKey = (e) => {
+      if(e.target.tagName === "INPUT" || e.target.tagName === "TEXTAREA") return;
+      const step = radius * 0.05;
+      if(e.key === "ArrowLeft")  { target.x -= Math.sin(theta)*step; target.z += Math.cos(theta)*step; }
+      if(e.key === "ArrowRight") { target.x += Math.sin(theta)*step; target.z -= Math.cos(theta)*step; }
+      if(e.key === "ArrowUp")    { target.y += step * 0.4; }
+      if(e.key === "ArrowDown")  { target.y -= step * 0.4; }
       updateCam();
     };
 
@@ -1281,15 +1320,18 @@ function BoxScene({ container, boxes, selectedId, onMoveBox, onSelectBox }) {
     renderer.domElement.addEventListener("mousemove", onMove);
     renderer.domElement.addEventListener("mouseup", onUp);
     renderer.domElement.addEventListener("mouseleave", onUp);
-    renderer.domElement.addEventListener("wheel", onWheel);
+    renderer.domElement.addEventListener("wheel", onWheel, { passive: false });
     renderer.domElement.style.cursor = "grab";
+    window.addEventListener("keydown", onKey);
 
     const animate = () => { frameRef.current=requestAnimationFrame(animate); renderer.render(scene,camera); };
     animate();
     const onResize = () => { const nw=mount.clientWidth,nh=mount.clientHeight; camera.aspect=nw/nh; camera.updateProjectionMatrix(); renderer.setSize(nw,nh); };
     window.addEventListener("resize", onResize);
     return () => {
-      cancelAnimationFrame(frameRef.current); window.removeEventListener("resize", onResize);
+      cancelAnimationFrame(frameRef.current);
+      window.removeEventListener("resize", onResize);
+      window.removeEventListener("keydown", onKey);
       renderer.domElement.removeEventListener("mousedown",onDown); renderer.domElement.removeEventListener("mousemove",onMove);
       renderer.domElement.removeEventListener("mouseup",onUp); renderer.domElement.removeEventListener("mouseleave",onUp);
       renderer.domElement.removeEventListener("wheel",onWheel);
@@ -1311,6 +1353,44 @@ function BoxScene({ container, boxes, selectedId, onMoveBox, onSelectBox }) {
     [-1,1].forEach(s => { const w=new THREE.Mesh(new THREE.PlaneGeometry(container.innerLength,container.innerHeight),wallMat); w.position.set(container.innerLength/2,container.innerHeight/2,s*container.innerWidth/2); w.userData.dynamic=true; scene.add(w); });
     const bw = new THREE.Mesh(new THREE.PlaneGeometry(container.innerWidth,container.innerHeight),wallMat);
     bw.rotation.y=Math.PI/2; bw.position.set(0,container.innerHeight/2,0); bw.userData.dynamic=true; scene.add(bw);
+
+    // Scale labels along bottom (length) and left wall (height)
+    const makeScaleLabel3D = (text) => {
+      const c = document.createElement("canvas");
+      c.width = 256; c.height = 64;
+      const ctx2 = c.getContext("2d");
+      ctx2.fillStyle = "rgba(0,20,40,0.82)";
+      ctx2.fillRect(0,0,256,64);
+      ctx2.fillStyle = "#00ffaa";
+      ctx2.font = "bold 28px monospace";
+      ctx2.textAlign = "center";
+      ctx2.textBaseline = "middle";
+      ctx2.fillText(text, 128, 32);
+      return new THREE.CanvasTexture(c);
+    };
+    // Length labels every 1000mm along bottom front edge
+    const lenStep = 1000;
+    for(let x=0; x<=container.innerLength; x+=lenStep) {
+      const sp = new THREE.Sprite(new THREE.SpriteMaterial({map:makeScaleLabel3D(`${x}`), depthTest:false}));
+      sp.scale.set(700,175,1);
+      sp.position.set(x, -250, container.innerWidth/2+200);
+      sp.userData.dynamic=true; scene.add(sp);
+      // tick line
+      const pts=[new THREE.Vector3(x,-10,container.innerWidth/2),new THREE.Vector3(x,-300,container.innerWidth/2)];
+      const tick=new THREE.Line(new THREE.BufferGeometry().setFromPoints(pts),new THREE.LineBasicMaterial({color:0x00ffaa}));
+      tick.userData.dynamic=true; scene.add(tick);
+    }
+    // Height labels every 500mm on left corner
+    const hStep = 500;
+    for(let y=0; y<=container.innerHeight; y+=hStep) {
+      const sp = new THREE.Sprite(new THREE.SpriteMaterial({map:makeScaleLabel3D(`${y}`), depthTest:false}));
+      sp.scale.set(600,150,1);
+      sp.position.set(-450, y, container.innerWidth/2);
+      sp.userData.dynamic=true; scene.add(sp);
+      const pts=[new THREE.Vector3(-10,y,container.innerWidth/2),new THREE.Vector3(-300,y,container.innerWidth/2)];
+      const tick=new THREE.Line(new THREE.BufferGeometry().setFromPoints(pts),new THREE.LineBasicMaterial({color:0x00ffaa}));
+      tick.userData.dynamic=true; scene.add(tick);
+    }
 
     boxes.forEach(b => {
       const color = new THREE.Color(b.color); const isSel = b.id === selectedId;
@@ -1337,7 +1417,7 @@ function BoxScene({ container, boxes, selectedId, onMoveBox, onSelectBox }) {
     <div style={{position:"relative",width:"100%",height:"100%"}}>
       <div ref={mountRef} style={{width:"100%",height:"100%"}}/>
       <div style={{position:"absolute",bottom:10,left:10,fontSize:10,color:"#6677aa",pointerEvents:"none",background:"rgba(0,0,0,0.4)",padding:"4px 9px",borderRadius:4,lineHeight:1.7}}>
-        🖱 Drag = หมุน &nbsp;|&nbsp; Ctrl+Drag = เลื่อน &nbsp;|&nbsp; Scroll = ซูม &nbsp;|&nbsp; คลิก+ลากกล่อง = จัดตำแหน่ง
+        🖱 Drag = หมุน &nbsp;|&nbsp; Ctrl+Drag = เลื่อนซ้ายขวา &nbsp;|&nbsp; Ctrl+Scroll = เลื่อนบนล่าง &nbsp;|&nbsp; Scroll = ซูม &nbsp;|&nbsp; ↑↓←→ = เลื่อนมุมมอง &nbsp;|&nbsp; ลากกล่อง = จัดตำแหน่ง
       </div>
     </div>
   );
