@@ -1129,18 +1129,36 @@ function BoxTopView({ container, boxes, selectedId, onSelectBox, onMoveBox, coll
 // ============================================================
 function makeBoxLabel(text, boxColor) {
   const c = document.createElement("canvas");
-  c.width = 400; c.height = 72;
+  c.width = 256; c.height = 44;
   const ctx = c.getContext("2d");
-  ctx.fillStyle = "rgba(0,0,0,0.72)";
-  ctx.fillRect(0, 0, 400, 72);
+  ctx.fillStyle = "rgba(0,0,0,0.60)";
+  ctx.fillRect(0, 0, 256, 44);
   ctx.strokeStyle = boxColor || "#ffffff";
-  ctx.lineWidth = 4;
-  ctx.strokeRect(2, 2, 396, 68);
-  ctx.fillStyle = "#ffffff";
-  ctx.font = "bold 26px monospace";
+  ctx.lineWidth = 2;
+  ctx.strokeRect(1, 1, 254, 42);
+  ctx.fillStyle = "#ffffffdd";
+  ctx.font = "bold 18px monospace";
   ctx.textAlign = "center";
   ctx.textBaseline = "middle";
-  ctx.fillText(text, 200, 36);
+  ctx.fillText(text, 128, 22);
+  return new THREE.CanvasTexture(c);
+}
+
+function makeNameLabel(text, boxColor) {
+  const c = document.createElement("canvas");
+  c.width = 512; c.height = 80;
+  const ctx = c.getContext("2d");
+  ctx.fillStyle = boxColor || "#00ddaa";
+  ctx.globalAlpha = 0.92;
+  ctx.beginPath();
+  ctx.roundRect(0, 0, 512, 80, 10);
+  ctx.fill();
+  ctx.globalAlpha = 1;
+  ctx.fillStyle = "#000000cc";
+  ctx.font = "bold 38px sans-serif";
+  ctx.textAlign = "center";
+  ctx.textBaseline = "middle";
+  ctx.fillText(text, 256, 40);
   return new THREE.CanvasTexture(c);
 }
 
@@ -1439,10 +1457,20 @@ function BoxScene({ container, boxes, selectedId, onMoveBox, onSelectBox, onPlac
 
       const labelTex = makeBoxLabel(`${b.length}×${b.width}×${b.height} mm`, b.color);
       const label = new THREE.Sprite(new THREE.SpriteMaterial({map:labelTex, depthTest:false}));
-      const lw = Math.max(b.length, 1400);
-      label.scale.set(lw, lw*0.18, 1);
-      label.position.set(b.x+b.length/2, b.z+b.height+280, b.y-container.innerWidth/2+b.width/2);
+      const lw = Math.max(b.length * 0.65, 700);
+      label.scale.set(lw, lw*0.172, 1);
+      // Position at front face (door-side) of box, at mid-height
+      label.position.set(b.x+b.length/2, b.z+b.height/2, b.y-container.innerWidth/2+b.width+180);
       label.userData.dynamic=true; scene.add(label);
+
+      if (isSel) {
+        const nameTex = makeNameLabel(b.name||b.preset, b.color);
+        const nameLabel = new THREE.Sprite(new THREE.SpriteMaterial({map:nameTex, depthTest:false}));
+        const nlw = Math.max(b.length, 1200);
+        nameLabel.scale.set(nlw, nlw*0.156, 1);
+        nameLabel.position.set(b.x+b.length/2, b.z+b.height+380, b.y-container.innerWidth/2+b.width/2);
+        nameLabel.userData.dynamic=true; scene.add(nameLabel);
+      }
 
       meshMapRef.current[b.id] = { mesh, edges, label };
     });
@@ -1453,6 +1481,144 @@ function BoxScene({ container, boxes, selectedId, onMoveBox, onSelectBox, onPlac
       <div ref={mountRef} style={{width:"100%",height:"100%"}}/>
       <div style={{position:"absolute",bottom:10,left:10,fontSize:10,color:"#6677aa",pointerEvents:"none",background:"rgba(0,0,0,0.4)",padding:"4px 9px",borderRadius:4,lineHeight:1.7}}>
         🖱 Drag = หมุน &nbsp;|&nbsp; Ctrl+Drag = เลื่อน &nbsp;|&nbsp; Shift+Drag = บนล่าง &nbsp;|&nbsp; Scroll = ซูม &nbsp;|&nbsp; ↑↓←→ = เลื่อน &nbsp;|&nbsp; ลากกล่อง = จัดพื้น &nbsp;|&nbsp; Alt+ลาก(เลือกกล่องก่อน) = ยกขึ้นลง &nbsp;|&nbsp; ⬜ = ชนกัน
+      </div>
+    </div>
+  );
+}
+
+// ============================================================
+// LOADING REPORT MODAL
+// ============================================================
+function BoxReportModal({ boxes, container, projectName, onClose }) {
+  const canvasRef = useRef(null);
+
+  const sorted = useMemo(() => {
+    const fl = [...boxes].filter(b => b.x >= -50).sort((a, b) =>
+      a.x !== b.x ? a.x - b.x : a.z !== b.z ? a.z - b.z : a.y - b.y
+    );
+    const f1MaxH = Math.max(...fl.filter(b => b.z < 100).map(b => b.height), 800);
+    return fl.map(b => ({ ...b, floor: b.z < 100 ? 1 : b.z < f1MaxH * 1.2 ? 2 : 3 }));
+  }, [boxes]);
+
+  useEffect(() => {
+    const canvas = canvasRef.current;
+    if (!canvas || !sorted.length) return;
+    const CW = canvas.width, CH = canvas.height;
+    const ctx = canvas.getContext("2d");
+    const PAD = 32;
+    const scale = Math.min((CW - PAD * 2) / container.innerLength, (CH - PAD * 2 - 24) / container.innerWidth);
+    const ox = PAD, oy = PAD;
+    const cw = container.innerLength * scale, ch2 = container.innerWidth * scale;
+    ctx.clearRect(0, 0, CW, CH);
+    ctx.fillStyle = "#f5f7fa"; ctx.fillRect(0, 0, CW, CH);
+    ctx.fillStyle = "#dde4ee"; ctx.fillRect(ox, oy, cw, ch2);
+    ctx.strokeStyle = "#445"; ctx.lineWidth = 2; ctx.strokeRect(ox, oy, cw, ch2);
+    // door
+    ctx.fillStyle = "#44bb77"; ctx.fillRect(ox + cw - 3, oy, 6, ch2);
+    ctx.font = "10px sans-serif"; ctx.fillStyle = "#445"; ctx.textAlign = "center";
+    ctx.fillText("ใน", ox + 20, oy - 8);
+    ctx.fillText("ประตู ▶", ox + cw, oy - 8);
+    const fc = ["#4488ff","#ff8833","#ff4455"];
+    sorted.forEach((b, i) => {
+      const bx = ox + b.x * scale, by = oy + b.y * scale;
+      const bw = b.length * scale, bh = b.width * scale;
+      ctx.fillStyle = fc[b.floor - 1] + "99";
+      ctx.fillRect(bx, by, bw, bh);
+      ctx.strokeStyle = fc[b.floor - 1]; ctx.lineWidth = 1; ctx.strokeRect(bx, by, bw, bh);
+      const fs = Math.max(7, Math.min(11, Math.min(bw, bh) * 0.55));
+      ctx.fillStyle = "#111"; ctx.font = `bold ${fs}px sans-serif`;
+      ctx.textAlign = "center"; ctx.textBaseline = "middle";
+      ctx.fillText(String(i + 1), bx + bw / 2, by + bh / 2);
+    });
+    ["ชั้น 1","ชั้น 2","ชั้น 3"].forEach((lbl, i) => {
+      const lx = ox + i * 72;
+      ctx.fillStyle = fc[i] + "99"; ctx.fillRect(lx, oy + ch2 + 8, 12, 12);
+      ctx.strokeStyle = fc[i]; ctx.lineWidth = 1; ctx.strokeRect(lx, oy + ch2 + 8, 12, 12);
+      ctx.fillStyle = "#445"; ctx.font = "10px sans-serif"; ctx.textAlign = "left"; ctx.textBaseline = "top";
+      ctx.fillText(lbl, lx + 15, oy + ch2 + 9);
+    });
+  }, [sorted, container]);
+
+  const printReport = () => {
+    const canvas = canvasRef.current;
+    const imgUrl = canvas ? canvas.toDataURL() : "";
+    const fc = ["#4488ff","#ff8833","#ff4455"];
+    const rows = sorted.map((b, i) => `
+      <tr style="background:${i%2?"#f9f9f9":"#fff"}">
+        <td style="text-align:center;font-weight:700;color:#224">${i+1}</td>
+        <td style="font-weight:600">${b.name||b.preset}</td>
+        <td style="font-family:monospace">${b.length}×${b.width}×${b.height}</td>
+        <td style="text-align:right;font-family:monospace">${Math.round(b.x)}</td>
+        <td style="text-align:right;font-family:monospace">${Math.round(b.y)}</td>
+        <td style="text-align:right;font-family:monospace">${Math.round(b.z)}</td>
+        <td style="text-align:center;font-weight:700;color:${fc[b.floor-1]}">ชั้น ${b.floor}</td>
+        <td style="text-align:right;font-family:monospace">${b.weight}</td>
+      </tr>`).join("");
+    const win = window.open("", "_blank");
+    win.document.write(`<!DOCTYPE html><html><head><meta charset="UTF-8"/>
+      <title>Loading Report — ${projectName}</title>
+      <style>*{margin:0;padding:0;box-sizing:border-box}body{font-family:sans-serif;padding:20px;color:#222}
+      h2{font-size:16px;margin-bottom:4px}.sub{font-size:11px;color:#666;margin-bottom:12px}
+      img{max-width:100%;border:1px solid #ccc;border-radius:4px;margin-bottom:14px}
+      table{width:100%;border-collapse:collapse;font-size:12px}
+      th{background:#2a3a5a;color:#fff;padding:5px 8px;text-align:left}
+      td{padding:4px 8px;border-bottom:1px solid #eee}
+      @media print{body{padding:10px}}</style></head><body>
+      <h2>📦 Loading Report — ${projectName}</h2>
+      <div class="sub">${container.name} | ${container.innerLength}×${container.innerWidth}×${container.innerHeight} mm | ${new Date().toLocaleDateString("th-TH")} | รวม ${sorted.length} รายการ (เรียงจากในสุด → ประตู)</div>
+      <img src="${imgUrl}"/>
+      <table><thead><tr>
+        <th style="width:36px">ที่</th><th>ชื่อสินค้า</th><th>L×W×H (mm)</th>
+        <th>X</th><th>Y</th><th>Z พื้น</th><th style="width:50px">ชั้น</th><th>น้ำหนัก kg</th>
+      </tr></thead><tbody>${rows}</tbody></table>
+    </body></html>`);
+    win.document.close();
+    win.addEventListener("load", () => win.print());
+  };
+
+  const fc = ["#4488ff","#ff8833","#ff4455"];
+  return (
+    <div style={{position:"fixed",inset:0,background:"rgba(0,0,0,0.75)",zIndex:1000,display:"flex",alignItems:"center",justifyContent:"center"}} onClick={onClose}>
+      <div style={{background:"#1a2235",borderRadius:10,border:"1px solid #3a4a66",width:"min(94vw,800px)",maxHeight:"90vh",overflow:"auto",padding:0}} onClick={e=>e.stopPropagation()}>
+        <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",padding:"10px 16px",borderBottom:"1px solid #2e3a52",position:"sticky",top:0,background:"#1a2235",zIndex:1}}>
+          <div style={{fontWeight:700,color:"#00ffaa",fontSize:14}}>📋 Loading Report — {projectName}</div>
+          <div style={{display:"flex",gap:6}}>
+            <button style={{padding:"4px 12px",borderRadius:5,border:"1px solid #00ddaa",background:"#00ddaa22",color:"#00ddaa",cursor:"pointer",fontSize:11}} onClick={printReport}>🖨 Print / PDF</button>
+            <button style={{padding:"4px 10px",borderRadius:5,border:"1px solid #555",background:"#2a3a52",color:"#aaa",cursor:"pointer",fontSize:11}} onClick={onClose}>✕ ปิด</button>
+          </div>
+        </div>
+        <div style={{padding:"12px 16px"}}>
+          <div style={{fontSize:10,color:"#7a8aaa",marginBottom:8}}>{container.name} | {container.innerLength}×{container.innerWidth}×{container.innerHeight} mm | รวม {sorted.length} รายการ — เรียงจากในสุด → ประตู</div>
+          <canvas ref={canvasRef} width={740} height={220} style={{width:"100%",borderRadius:6,border:"1px solid #2e3a52",display:"block",marginBottom:12}}/>
+          <table style={{width:"100%",borderCollapse:"collapse",fontSize:11}}>
+            <thead>
+              <tr style={{background:"#0d1628"}}>
+                {["ที่","ชื่อสินค้า","L×W×H mm","X","Y","Z พื้น","ชั้น","น้ำหนัก kg"].map(h=>(
+                  <th key={h} style={{padding:"5px 7px",textAlign:"left",color:"#00ddaa",fontWeight:600,borderBottom:"1px solid #2e3a52",whiteSpace:"nowrap"}}>{h}</th>
+                ))}
+              </tr>
+            </thead>
+            <tbody>
+              {sorted.map((b,i)=>(
+                <tr key={b.id} style={{background:i%2?"#1a2235":"#1e2a42"}}>
+                  <td style={{padding:"4px 7px",fontWeight:700,color:"#00ffaa",textAlign:"center"}}>{i+1}</td>
+                  <td style={{padding:"4px 7px"}}>
+                    <div style={{display:"flex",alignItems:"center",gap:5}}>
+                      <div style={{width:8,height:8,borderRadius:2,background:b.color,flexShrink:0}}/>
+                      <span style={{fontWeight:600}}>{b.name||b.preset}</span>
+                    </div>
+                  </td>
+                  <td style={{padding:"4px 7px",fontFamily:"monospace",color:"#aab"}}>{b.length}×{b.width}×{b.height}</td>
+                  <td style={{padding:"4px 7px",fontFamily:"monospace",textAlign:"right"}}>{Math.round(b.x)}</td>
+                  <td style={{padding:"4px 7px",fontFamily:"monospace",textAlign:"right"}}>{Math.round(b.y)}</td>
+                  <td style={{padding:"4px 7px",fontFamily:"monospace",textAlign:"right"}}>{Math.round(b.z)}</td>
+                  <td style={{padding:"4px 7px",textAlign:"center",fontWeight:700,color:fc[b.floor-1]}}>ชั้น {b.floor}</td>
+                  <td style={{padding:"4px 7px",fontFamily:"monospace",textAlign:"right"}}>{b.weight}</td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
       </div>
     </div>
   );
@@ -1482,6 +1648,7 @@ export default function App() {
   const [spawnY, setSpawnY] = useState(0);
   const [spawnZ, setSpawnZ] = useState(0);
   const [projectName, setProjectName] = useState("My Project");
+  const [showReport, setShowReport] = useState(false);
   const vehiclesRef = useRef([]);
   vehiclesRef.current = vehicles;
   const sideElevRef = useRef(null);
@@ -1693,7 +1860,9 @@ export default function App() {
   const importBoxCSV = (file) => {
     const reader = new FileReader();
     reader.onload = e => {
-      const lines = e.target.result.split(/\r?\n/).filter(l=>l.trim());
+      const raw = e.target.result.replace(/^\uFEFF/, '');
+      const content = raw.replace(/(\d)([A-Za-z])/g, '$1\n$2');
+      const lines = content.split(/\r\n|\r|\n/).filter(l=>l.trim());
       const rows = lines.map(l=>l.split(/[,;\t]/));
       const start = isNaN(Number(rows[0]?.[1])) ? 1 : 0;
       const newBoxes = [];
@@ -1934,6 +2103,7 @@ export default function App() {
                   onChange={e=>{if(e.target.files[0]){importBoxCSV(e.target.files[0]);e.target.value="";}}}/>
               </label>
               <button style={{...S.btn,flex:1,fontSize:10,padding:"3px 0"}} onClick={autoArrangeBoxes} disabled={!boxes.length}>⚡ Auto Pack</button>
+              <button style={{...S.btn,flex:1,fontSize:10,padding:"3px 0"}} onClick={()=>setShowReport(true)} disabled={!boxes.length}>📋 รายงาน</button>
             </div>
             {showAddBox && (
               <div style={{background:"#161638",borderRadius:7,padding:9,marginBottom:8,border:"1px solid #00ffaa33"}}>
@@ -2023,6 +2193,7 @@ export default function App() {
           : <span>Boxes: {boxes.length} | {totalBoxWeight.toLocaleString()} kg {totalBoxWeight>container.maxPayload?`⚠️ +${(totalBoxWeight-container.maxPayload).toLocaleString()}kg`:""}</span>
         }
       </div>
+      {showReport && <BoxReportModal boxes={boxes} container={container} projectName={projectName} onClose={()=>setShowReport(false)}/>}
     </div>
   );
 }
