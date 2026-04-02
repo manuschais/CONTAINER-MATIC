@@ -1120,10 +1120,32 @@ function BoxTopView({ container, boxes, selectedId, onSelectBox, onMoveBox, coll
 // ============================================================
 // BOX 3D SCENE
 // ============================================================
-function BoxScene({ container, boxes, selectedId }) {
+function makeBoxLabel(text, boxColor) {
+  const c = document.createElement("canvas");
+  c.width = 400; c.height = 72;
+  const ctx = c.getContext("2d");
+  ctx.fillStyle = "rgba(0,0,0,0.72)";
+  ctx.fillRect(0, 0, 400, 72);
+  ctx.strokeStyle = boxColor || "#ffffff";
+  ctx.lineWidth = 4;
+  ctx.strokeRect(2, 2, 396, 68);
+  ctx.fillStyle = "#ffffff";
+  ctx.font = "bold 26px monospace";
+  ctx.textAlign = "center";
+  ctx.textBaseline = "middle";
+  ctx.fillText(text, 200, 36);
+  return new THREE.CanvasTexture(c);
+}
+
+function BoxScene({ container, boxes, selectedId, onMoveBox, onSelectBox }) {
   const mountRef = useRef(null);
-  const sceneRef = useRef({});
+  const sceneRef = useRef(null);
+  const cameraRef = useRef(null);
+  const rendererRef = useRef(null);
+  const meshMapRef = useRef({});
   const frameRef = useRef(null);
+  const stateRef = useRef({});
+  useEffect(() => { stateRef.current = { boxes, container, onMoveBox, onSelectBox }; });
 
   useEffect(() => {
     const mount = mountRef.current; if (!mount) return;
@@ -1133,9 +1155,11 @@ function BoxScene({ container, boxes, selectedId }) {
     scene.fog = new THREE.FogExp2(0xdce8f5, 0.00004);
     const camera = new THREE.PerspectiveCamera(50, w/h, 10, 100000);
     const renderer = new THREE.WebGLRenderer({ antialias: true });
-    renderer.setSize(w, h); renderer.setPixelRatio(Math.min(window.devicePixelRatio,2));
+    renderer.setSize(w, h); renderer.setPixelRatio(Math.min(window.devicePixelRatio, 2));
     renderer.shadowMap.enabled = true; renderer.shadowMap.type = THREE.PCFSoftShadowMap;
     mount.appendChild(renderer.domElement);
+    sceneRef.current = scene; cameraRef.current = camera; rendererRef.current = renderer;
+
     scene.add(new THREE.AmbientLight(0xffffff, 1.2));
     const dir = new THREE.DirectionalLight(0xffffff, 1.8);
     dir.position.set(15000,20000,10000); dir.castShadow=true;
@@ -1145,54 +1169,178 @@ function BoxScene({ container, boxes, selectedId }) {
     const gnd = new THREE.Mesh(new THREE.PlaneGeometry(60000,60000), new THREE.MeshLambertMaterial({color:0xc8d8e8}));
     gnd.rotation.x=-Math.PI/2; gnd.position.y=-5; gnd.receiveShadow=true; scene.add(gnd);
     scene.add(new THREE.GridHelper(40000,40,0x8899bb,0xaabbcc));
-    sceneRef.current = { scene, camera, renderer, mount };
-    let isDown=false,startX=0,startY=0,theta=0.7,phi=0.55,radius=20000;
-    const target=new THREE.Vector3(6000,1200,0);
-    const updateCam=()=>{ camera.position.set(target.x+radius*Math.sin(phi)*Math.cos(theta),target.y+radius*Math.cos(phi),target.z+radius*Math.sin(phi)*Math.sin(theta)); camera.lookAt(target); };
+
+    const raycaster = new THREE.Raycaster();
+    const mouse = new THREE.Vector2();
+    const floorPlane = new THREE.Plane(new THREE.Vector3(0,1,0), 0);
+    const floorPt = new THREE.Vector3();
+    let isOrbit=false, startX=0, startY=0, theta=0.7, phi=0.55, radius=20000;
+    let isDraggingBox=false, dragBoxId=null, dragOffX=0, dragOffZ=0, dragNewX=0, dragNewY=0;
+    const target = new THREE.Vector3(6000,1200,0);
+
+    const updateCam = () => {
+      camera.position.set(
+        target.x + radius*Math.sin(phi)*Math.cos(theta),
+        target.y + radius*Math.cos(phi),
+        target.z + radius*Math.sin(phi)*Math.sin(theta)
+      );
+      camera.lookAt(target);
+    };
     updateCam();
-    const onDown=(e)=>{isDown=true;startX=e.clientX;startY=e.clientY;};
-    const onMove=(e)=>{if(!isDown)return;theta+=(e.clientX-startX)*0.005;phi=Math.max(0.1,Math.min(Math.PI/2-0.05,phi-(e.clientY-startY)*0.005));startX=e.clientX;startY=e.clientY;updateCam();};
-    const onUp=()=>{isDown=false;};
-    const onWheel=(e)=>{radius=Math.max(4000,Math.min(45000,radius+e.deltaY*12));updateCam();};
-    renderer.domElement.addEventListener("mousedown",onDown); renderer.domElement.addEventListener("mousemove",onMove);
-    renderer.domElement.addEventListener("mouseup",onUp); renderer.domElement.addEventListener("wheel",onWheel);
-    const animate=()=>{frameRef.current=requestAnimationFrame(animate);renderer.render(scene,camera);};
+
+    const getBoxMeshes = () => {
+      const m = [];
+      scene.traverse(o => { if(o.userData.isBoxMesh) m.push(o); });
+      return m;
+    };
+
+    const onDown = (e) => {
+      startX = e.clientX; startY = e.clientY;
+      if(!e.ctrlKey) {
+        const rect = renderer.domElement.getBoundingClientRect();
+        mouse.x = ((e.clientX-rect.left)/rect.width)*2-1;
+        mouse.y = -((e.clientY-rect.top)/rect.height)*2+1;
+        raycaster.setFromCamera(mouse, camera);
+        const hits = raycaster.intersectObjects(getBoxMeshes());
+        if(hits.length > 0) {
+          const bId = hits[0].object.userData.boxId;
+          stateRef.current.onSelectBox?.(bId);
+          raycaster.ray.intersectPlane(floorPlane, floorPt);
+          const b = stateRef.current.boxes.find(x => x.id === bId);
+          const cnt = stateRef.current.container;
+          if(b) {
+            dragOffX = floorPt.x - (b.x + b.length/2);
+            dragOffZ = floorPt.z - (b.y - cnt.innerWidth/2 + b.width/2);
+            dragNewX = b.x; dragNewY = b.y;
+            dragBoxId = bId; isDraggingBox = true;
+            renderer.domElement.style.cursor = "grabbing";
+          }
+          return;
+        }
+      }
+      isOrbit = true;
+      renderer.domElement.style.cursor = "grabbing";
+    };
+
+    const onMove = (e) => {
+      const dx = e.clientX - startX;
+      const dy = e.clientY - startY;
+      startX = e.clientX; startY = e.clientY;
+
+      if(isDraggingBox && dragBoxId) {
+        const rect = renderer.domElement.getBoundingClientRect();
+        mouse.x = ((e.clientX-rect.left)/rect.width)*2-1;
+        mouse.y = -((e.clientY-rect.top)/rect.height)*2+1;
+        raycaster.setFromCamera(mouse, camera);
+        if(!raycaster.ray.intersectPlane(floorPlane, floorPt)) return;
+        const { boxes: bxs, container: cnt } = stateRef.current;
+        const b = bxs.find(x => x.id === dragBoxId);
+        if(!b) return;
+        const newMeshX = floorPt.x - dragOffX;
+        const newMeshZ = floorPt.z - dragOffZ;
+        dragNewX = Math.max(0, Math.min(cnt.innerLength - b.length, newMeshX - b.length/2));
+        dragNewY = Math.max(0, Math.min(cnt.innerWidth - b.width, newMeshZ + cnt.innerWidth/2 - b.width/2));
+        const finalMeshX = dragNewX + b.length/2;
+        const finalMeshZ = dragNewY - cnt.innerWidth/2 + b.width/2;
+        const entry = meshMapRef.current[dragBoxId];
+        if(entry) {
+          entry.mesh.position.x = finalMeshX; entry.mesh.position.z = finalMeshZ;
+          entry.edges.position.x = finalMeshX; entry.edges.position.z = finalMeshZ;
+          if(entry.label) { entry.label.position.x = finalMeshX; entry.label.position.z = finalMeshZ; }
+        }
+        return;
+      }
+
+      if(!isOrbit) return;
+      if(e.ctrlKey) {
+        const panSpeed = radius / mount.clientHeight;
+        target.x -= Math.sin(theta) * dx * panSpeed;
+        target.z += Math.cos(theta) * dx * panSpeed;
+        target.y -= dy * panSpeed;
+      } else {
+        theta += dx * 0.005;
+        phi = Math.max(0.1, Math.min(Math.PI/2-0.05, phi - dy * 0.005));
+      }
+      updateCam();
+    };
+
+    const onUp = () => {
+      if(isDraggingBox && dragBoxId) {
+        stateRef.current.onMoveBox?.(dragBoxId, dragNewX, dragNewY);
+      }
+      isDraggingBox = false; dragBoxId = null; isOrbit = false;
+      renderer.domElement.style.cursor = "grab";
+    };
+
+    const onWheel = (e) => {
+      radius = Math.max(4000, Math.min(45000, radius + e.deltaY * 12));
+      updateCam();
+    };
+
+    renderer.domElement.addEventListener("mousedown", onDown);
+    renderer.domElement.addEventListener("mousemove", onMove);
+    renderer.domElement.addEventListener("mouseup", onUp);
+    renderer.domElement.addEventListener("mouseleave", onUp);
+    renderer.domElement.addEventListener("wheel", onWheel);
+    renderer.domElement.style.cursor = "grab";
+
+    const animate = () => { frameRef.current=requestAnimationFrame(animate); renderer.render(scene,camera); };
     animate();
-    const onResize=()=>{const nw=mount.clientWidth,nh=mount.clientHeight;camera.aspect=nw/nh;camera.updateProjectionMatrix();renderer.setSize(nw,nh);};
-    window.addEventListener("resize",onResize);
-    return ()=>{
-      cancelAnimationFrame(frameRef.current); window.removeEventListener("resize",onResize);
+    const onResize = () => { const nw=mount.clientWidth,nh=mount.clientHeight; camera.aspect=nw/nh; camera.updateProjectionMatrix(); renderer.setSize(nw,nh); };
+    window.addEventListener("resize", onResize);
+    return () => {
+      cancelAnimationFrame(frameRef.current); window.removeEventListener("resize", onResize);
       renderer.domElement.removeEventListener("mousedown",onDown); renderer.domElement.removeEventListener("mousemove",onMove);
-      renderer.domElement.removeEventListener("mouseup",onUp); renderer.domElement.removeEventListener("wheel",onWheel);
-      if(mount.contains(renderer.domElement))mount.removeChild(renderer.domElement);
+      renderer.domElement.removeEventListener("mouseup",onUp); renderer.domElement.removeEventListener("mouseleave",onUp);
+      renderer.domElement.removeEventListener("wheel",onWheel);
+      if(mount.contains(renderer.domElement)) mount.removeChild(renderer.domElement);
       renderer.dispose();
     };
   }, []);
 
   useEffect(() => {
-    const { scene } = sceneRef.current; if (!scene) return;
-    const rem=[]; scene.traverse((o)=>{if(o.userData.dynamic)rem.push(o);}); rem.forEach((o)=>scene.remove(o));
-    const cEdge=new THREE.LineSegments(new THREE.EdgesGeometry(new THREE.BoxGeometry(container.innerLength,container.innerHeight,container.innerWidth)),new THREE.LineBasicMaterial({color:0x00ffaa}));
+    const scene = sceneRef.current; if(!scene) return;
+    const rem = []; scene.traverse(o => { if(o.userData.dynamic) rem.push(o); }); rem.forEach(o => scene.remove(o));
+    meshMapRef.current = {};
+
+    const cEdge = new THREE.LineSegments(new THREE.EdgesGeometry(new THREE.BoxGeometry(container.innerLength,container.innerHeight,container.innerWidth)),new THREE.LineBasicMaterial({color:0x00ffaa}));
     cEdge.position.set(container.innerLength/2,container.innerHeight/2,0); cEdge.userData.dynamic=true; scene.add(cEdge);
-    const cf=new THREE.Mesh(new THREE.PlaneGeometry(container.innerLength,container.innerWidth),new THREE.MeshLambertMaterial({color:0x1a3a2a,transparent:true,opacity:0.4,side:THREE.DoubleSide}));
+    const cf = new THREE.Mesh(new THREE.PlaneGeometry(container.innerLength,container.innerWidth),new THREE.MeshLambertMaterial({color:0x1a3a2a,transparent:true,opacity:0.4,side:THREE.DoubleSide}));
     cf.rotation.x=-Math.PI/2; cf.position.set(container.innerLength/2,2,0); cf.receiveShadow=true; cf.userData.dynamic=true; scene.add(cf);
-    const wallMat=new THREE.MeshLambertMaterial({color:0x88aacc,transparent:true,opacity:0.1,side:THREE.DoubleSide});
-    [-1,1].forEach((s)=>{ const w=new THREE.Mesh(new THREE.PlaneGeometry(container.innerLength,container.innerHeight),wallMat); w.position.set(container.innerLength/2,container.innerHeight/2,s*container.innerWidth/2); w.userData.dynamic=true; scene.add(w); });
-    const bw=new THREE.Mesh(new THREE.PlaneGeometry(container.innerWidth,container.innerHeight),wallMat);
+    const wallMat = new THREE.MeshLambertMaterial({color:0x88aacc,transparent:true,opacity:0.1,side:THREE.DoubleSide});
+    [-1,1].forEach(s => { const w=new THREE.Mesh(new THREE.PlaneGeometry(container.innerLength,container.innerHeight),wallMat); w.position.set(container.innerLength/2,container.innerHeight/2,s*container.innerWidth/2); w.userData.dynamic=true; scene.add(w); });
+    const bw = new THREE.Mesh(new THREE.PlaneGeometry(container.innerWidth,container.innerHeight),wallMat);
     bw.rotation.y=Math.PI/2; bw.position.set(0,container.innerHeight/2,0); bw.userData.dynamic=true; scene.add(bw);
 
-    boxes.forEach((b) => {
-      const color=new THREE.Color(b.color); const isSel=b.id===selectedId;
-      const geo=new THREE.BoxGeometry(b.length,b.height,b.width);
-      const mesh=new THREE.Mesh(geo,new THREE.MeshPhongMaterial({color,specular:0x222222,shininess:40,transparent:true,opacity:isSel?1:0.88}));
+    boxes.forEach(b => {
+      const color = new THREE.Color(b.color); const isSel = b.id === selectedId;
+      const geo = new THREE.BoxGeometry(b.length,b.height,b.width);
+      const mesh = new THREE.Mesh(geo, new THREE.MeshPhongMaterial({color,specular:0x222222,shininess:40,transparent:true,opacity:isSel?1:0.88}));
       mesh.position.set(b.x+b.length/2, b.z+b.height/2, b.y-container.innerWidth/2+b.width/2);
-      mesh.castShadow=true; mesh.userData.dynamic=true; scene.add(mesh);
-      const edges=new THREE.LineSegments(new THREE.EdgesGeometry(geo),new THREE.LineBasicMaterial({color:isSel?0xffffff:0x000000,transparent:true,opacity:isSel?0.9:0.25}));
+      mesh.castShadow=true; mesh.userData.dynamic=true; mesh.userData.isBoxMesh=true; mesh.userData.boxId=b.id;
+      scene.add(mesh);
+      const edges = new THREE.LineSegments(new THREE.EdgesGeometry(geo),new THREE.LineBasicMaterial({color:isSel?0xffffff:0x000000,transparent:true,opacity:isSel?0.9:0.25}));
       edges.position.copy(mesh.position); edges.userData.dynamic=true; scene.add(edges);
+
+      const labelTex = makeBoxLabel(`${b.length}×${b.width}×${b.height} mm`, b.color);
+      const label = new THREE.Sprite(new THREE.SpriteMaterial({map:labelTex, depthTest:false}));
+      const lw = Math.max(b.length, 1400);
+      label.scale.set(lw, lw*0.18, 1);
+      label.position.set(b.x+b.length/2, b.z+b.height+280, b.y-container.innerWidth/2+b.width/2);
+      label.userData.dynamic=true; scene.add(label);
+
+      meshMapRef.current[b.id] = { mesh, edges, label };
     });
   }, [container, boxes, selectedId]);
 
-  return <div ref={mountRef} style={{width:"100%",height:"100%",cursor:"grab"}}/>;
+  return (
+    <div style={{position:"relative",width:"100%",height:"100%"}}>
+      <div ref={mountRef} style={{width:"100%",height:"100%"}}/>
+      <div style={{position:"absolute",bottom:10,left:10,fontSize:10,color:"#6677aa",pointerEvents:"none",background:"rgba(0,0,0,0.4)",padding:"4px 9px",borderRadius:4,lineHeight:1.7}}>
+        🖱 Drag = หมุน &nbsp;|&nbsp; Ctrl+Drag = เลื่อน &nbsp;|&nbsp; Scroll = ซูม &nbsp;|&nbsp; คลิก+ลากกล่อง = จัดตำแหน่ง
+      </div>
+    </div>
+  );
 }
 
 // ============================================================
@@ -1628,7 +1776,7 @@ export default function App() {
           <div style={S.va}>
             {viewMode==="car" && <SideElevView ref={sideElevRef} container={container} vehicles={vehicles} selectedId={selectedId} onSelectVehicle={setSelectedId} onUpdateVehicle={updateV}/>}
             {viewMode==="boxtop" && <BoxTopView container={container} boxes={boxes} selectedId={selectedBoxId} onSelectBox={setSelectedBoxId} onMoveBox={moveBox} collisions={boxCollisions}/>}
-            {viewMode==="box3d" && <BoxScene container={container} boxes={boxes} selectedId={selectedBoxId}/>}
+            {viewMode==="box3d" && <BoxScene container={container} boxes={boxes} selectedId={selectedBoxId} onMoveBox={moveBox} onSelectBox={setSelectedBoxId}/>}
           </div>
         </div>
       </div>
