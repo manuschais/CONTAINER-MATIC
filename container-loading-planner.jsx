@@ -1175,7 +1175,7 @@ function BoxScene({ container, boxes, selectedId, onMoveBox, onSelectBox, onPlac
     const floorPlane = new THREE.Plane(new THREE.Vector3(0,1,0), 0);
     const floorPt = new THREE.Vector3();
     let isOrbit=false, startX=0, startY=0, theta=0.7, phi=0.55, radius=20000;
-    let isDraggingBox=false, dragBoxId=null, dragOffX=0, dragOffZ=0, dragNewX=0, dragNewY=0;
+    let isDraggingBox=false, dragBoxId=null, dragOffX=0, dragOffZ=0, dragNewX=0, dragNewY=0, dragNewZ=0, dragAlt=false;
     const target = new THREE.Vector3(6000,1200,0);
 
     const updateCam = () => {
@@ -1211,7 +1211,8 @@ function BoxScene({ container, boxes, selectedId, onMoveBox, onSelectBox, onPlac
           if(b) {
             dragOffX = floorPt.x - (b.x + b.length/2);
             dragOffZ = floorPt.z - (b.y - cnt.innerWidth/2 + b.width/2);
-            dragNewX = b.x; dragNewY = b.y;
+            dragNewX = b.x; dragNewY = b.y; dragNewZ = b.z;
+            dragAlt = e.altKey;
             dragBoxId = bId; isDraggingBox = true;
             renderer.domElement.style.cursor = "grabbing";
           }
@@ -1228,26 +1229,37 @@ function BoxScene({ container, boxes, selectedId, onMoveBox, onSelectBox, onPlac
       startX = e.clientX; startY = e.clientY;
 
       if(isDraggingBox && dragBoxId) {
-        const rect = renderer.domElement.getBoundingClientRect();
-        mouse.x = ((e.clientX-rect.left)/rect.width)*2-1;
-        mouse.y = -((e.clientY-rect.top)/rect.height)*2+1;
-        raycaster.setFromCamera(mouse, camera);
-        if(!raycaster.ray.intersectPlane(floorPlane, floorPt)) return;
         const { boxes: bxs, container: cnt } = stateRef.current;
         const b = bxs.find(x => x.id === dragBoxId);
         if(!b) return;
-        const newMeshX = floorPt.x - dragOffX;
-        const newMeshZ = floorPt.z - dragOffZ;
-        dragNewX = Math.max(0, Math.min(cnt.innerLength - b.length, newMeshX - b.length/2));
-        dragNewY = Math.max(0, Math.min(cnt.innerWidth - b.width, newMeshZ + cnt.innerWidth/2 - b.width/2));
-        const finalMeshX = dragNewX + b.length/2;
-        const finalMeshY = b.z + b.height/2;
-        const finalMeshZ = dragNewY - cnt.innerWidth/2 + b.width/2;
         const entry = meshMapRef.current[dragBoxId];
-        if(entry) {
-          entry.mesh.position.set(finalMeshX, finalMeshY, finalMeshZ);
-          entry.edges.position.set(finalMeshX, finalMeshY, finalMeshZ);
-          if(entry.label) entry.label.position.set(finalMeshX, b.z + b.height + 280, finalMeshZ);
+        if(!entry) return;
+
+        if(dragAlt) {
+          // Alt+drag up/down = raise/lower box along world Y
+          const liftSpeed = (cnt.innerHeight / mount.clientHeight) * 2;
+          dragNewZ = Math.max(0, Math.min(cnt.innerHeight - b.height, dragNewZ - dy * liftSpeed));
+          const mx = dragNewX + b.length/2;
+          const mz = dragNewY - cnt.innerWidth/2 + b.width/2;
+          entry.mesh.position.set(mx, dragNewZ + b.height/2, mz);
+          entry.edges.position.set(mx, dragNewZ + b.height/2, mz);
+          if(entry.label) entry.label.position.set(mx, dragNewZ + b.height + 280, mz);
+        } else {
+          const rect = renderer.domElement.getBoundingClientRect();
+          mouse.x = ((e.clientX-rect.left)/rect.width)*2-1;
+          mouse.y = -((e.clientY-rect.top)/rect.height)*2+1;
+          raycaster.setFromCamera(mouse, camera);
+          if(!raycaster.ray.intersectPlane(floorPlane, floorPt)) return;
+          const newMeshX = floorPt.x - dragOffX;
+          const newMeshZ = floorPt.z - dragOffZ;
+          dragNewX = Math.max(0, Math.min(cnt.innerLength - b.length, newMeshX - b.length/2));
+          dragNewY = Math.max(0, Math.min(cnt.innerWidth - b.width, newMeshZ + cnt.innerWidth/2 - b.width/2));
+          const mx = dragNewX + b.length/2;
+          const my = dragNewZ + b.height/2;
+          const mz = dragNewY - cnt.innerWidth/2 + b.width/2;
+          entry.mesh.position.set(mx, my, mz);
+          entry.edges.position.set(mx, my, mz);
+          if(entry.label) entry.label.position.set(mx, dragNewZ + b.height + 280, mz);
         }
         return;
       }
@@ -1272,9 +1284,9 @@ function BoxScene({ container, boxes, selectedId, onMoveBox, onSelectBox, onPlac
 
     const onUp = () => {
       if(isDraggingBox && dragBoxId) {
-        stateRef.current.onMoveBox?.(dragBoxId, dragNewX, dragNewY);
+        stateRef.current.onPlaceBox?.(dragBoxId, dragNewX, dragNewY, dragNewZ);
       }
-      isDraggingBox = false; dragBoxId = null; isOrbit = false;
+      isDraggingBox = false; dragBoxId = null; dragAlt = false; isOrbit = false;
       renderer.domElement.style.cursor = "grab";
     };
 
@@ -1412,7 +1424,7 @@ function BoxScene({ container, boxes, selectedId, onMoveBox, onSelectBox, onPlac
     <div style={{position:"relative",width:"100%",height:"100%"}}>
       <div ref={mountRef} style={{width:"100%",height:"100%"}}/>
       <div style={{position:"absolute",bottom:10,left:10,fontSize:10,color:"#6677aa",pointerEvents:"none",background:"rgba(0,0,0,0.4)",padding:"4px 9px",borderRadius:4,lineHeight:1.7}}>
-        🖱 Drag = หมุน &nbsp;|&nbsp; Ctrl+Drag = เลื่อน &nbsp;|&nbsp; Shift+Drag = บนล่าง &nbsp;|&nbsp; Scroll = ซูม &nbsp;|&nbsp; ↑↓←→ = เลื่อน &nbsp;|&nbsp; ลากกล่อง = จัดตำแหน่ง &nbsp;|&nbsp; ⬜ = ชนกัน
+        🖱 Drag = หมุน &nbsp;|&nbsp; Ctrl+Drag = เลื่อน &nbsp;|&nbsp; Shift+Drag = บนล่าง &nbsp;|&nbsp; Scroll = ซูม &nbsp;|&nbsp; ↑↓←→ = เลื่อน &nbsp;|&nbsp; ลากกล่อง = จัดพื้น &nbsp;|&nbsp; Alt+ลากกล่อง = ยกขึ้นลง &nbsp;|&nbsp; ⬜ = ชนกัน
       </div>
     </div>
   );
