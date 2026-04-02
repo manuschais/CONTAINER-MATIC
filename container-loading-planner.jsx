@@ -1175,7 +1175,7 @@ function BoxScene({ container, boxes, selectedId, onMoveBox, onSelectBox, onPlac
     const floorPlane = new THREE.Plane(new THREE.Vector3(0,1,0), 0);
     const floorPt = new THREE.Vector3();
     let isOrbit=false, startX=0, startY=0, theta=0.7, phi=0.55, radius=20000;
-    let isDraggingBox=false, dragBoxId=null, dragOffX=0, dragOffZ=0, dragNewX=0, dragNewY=0, dragIsStack=false;
+    let isDraggingBox=false, dragBoxId=null, dragOffX=0, dragOffZ=0, dragNewX=0, dragNewY=0;
     const target = new THREE.Vector3(6000,1200,0);
 
     const updateCam = () => {
@@ -1194,22 +1194,9 @@ function BoxScene({ container, boxes, selectedId, onMoveBox, onSelectBox, onPlac
       return m;
     };
 
-    const calcStackZ = (bId, nx, ny) => {
-      const { boxes: bxs } = stateRef.current;
-      const b = bxs.find(x => x.id === bId); if(!b) return 0;
-      let topZ = 0;
-      for(const o of bxs) {
-        if(o.id === bId) continue;
-        const overlapX = Math.min(nx+b.length, o.x+o.length) - Math.max(nx, o.x);
-        const overlapY = Math.min(ny+b.width, o.y+o.width) - Math.max(ny, o.y);
-        if(overlapX > 1 && overlapY > 1) topZ = Math.max(topZ, o.z + o.height);
-      }
-      return topZ;
-    };
-
     const onDown = (e) => {
       startX = e.clientX; startY = e.clientY;
-      if(!e.ctrlKey) {
+      if(!e.ctrlKey && !e.shiftKey) {
         const rect = renderer.domElement.getBoundingClientRect();
         mouse.x = ((e.clientX-rect.left)/rect.width)*2-1;
         mouse.y = -((e.clientY-rect.top)/rect.height)*2+1;
@@ -1224,7 +1211,7 @@ function BoxScene({ container, boxes, selectedId, onMoveBox, onSelectBox, onPlac
           if(b) {
             dragOffX = floorPt.x - (b.x + b.length/2);
             dragOffZ = floorPt.z - (b.y - cnt.innerWidth/2 + b.width/2);
-            dragNewX = b.x; dragNewY = b.y; dragIsStack = e.shiftKey;
+            dragNewX = b.x; dragNewY = b.y;
             dragBoxId = bId; isDraggingBox = true;
             renderer.domElement.style.cursor = "grabbing";
           }
@@ -1253,26 +1240,27 @@ function BoxScene({ container, boxes, selectedId, onMoveBox, onSelectBox, onPlac
         const newMeshZ = floorPt.z - dragOffZ;
         dragNewX = Math.max(0, Math.min(cnt.innerLength - b.length, newMeshX - b.length/2));
         dragNewY = Math.max(0, Math.min(cnt.innerWidth - b.width, newMeshZ + cnt.innerWidth/2 - b.width/2));
-        const stackZ = dragIsStack ? calcStackZ(dragBoxId, dragNewX, dragNewY) : b.z;
         const finalMeshX = dragNewX + b.length/2;
-        const finalMeshY = stackZ + b.height/2;
+        const finalMeshY = b.z + b.height/2;
         const finalMeshZ = dragNewY - cnt.innerWidth/2 + b.width/2;
         const entry = meshMapRef.current[dragBoxId];
         if(entry) {
           entry.mesh.position.set(finalMeshX, finalMeshY, finalMeshZ);
           entry.edges.position.set(finalMeshX, finalMeshY, finalMeshZ);
-          if(entry.label) entry.label.position.set(finalMeshX, stackZ + b.height + 280, finalMeshZ);
+          if(entry.label) entry.label.position.set(finalMeshX, b.z + b.height + 280, finalMeshZ);
         }
         return;
       }
 
       if(!isOrbit) return;
-      if(e.ctrlKey) {
+      if(e.shiftKey) {
+        // Shift+drag: pan camera up/down (world Y)
         const panSpeed = radius / mount.clientHeight;
-        // left/right: strafe perpendicular to view direction on floor
+        target.y -= dy * panSpeed;
+      } else if(e.ctrlKey) {
+        const panSpeed = radius / mount.clientHeight;
         target.x -= Math.sin(theta) * dx * panSpeed;
         target.z += Math.cos(theta) * dx * panSpeed;
-        // up/down: move forward/backward along view direction on floor
         target.x -= Math.cos(theta) * dy * panSpeed;
         target.z -= Math.sin(theta) * dy * panSpeed;
       } else {
@@ -1282,45 +1270,11 @@ function BoxScene({ container, boxes, selectedId, onMoveBox, onSelectBox, onPlac
       updateCam();
     };
 
-    const findFreePos = (bId, nx, ny) => {
-      const { boxes: bxs, container: cnt } = stateRef.current;
-      const b = bxs.find(x => x.id === bId); if(!b) return { x: nx, y: ny };
-      const others = bxs.filter(x => x.id !== bId);
-      let rx = Math.max(0, Math.min(cnt.innerLength - b.length, nx));
-      let ry = Math.max(0, Math.min(cnt.innerWidth - b.width, ny));
-      // Iteratively push out of each overlapping box (min-penetration axis)
-      for(let pass=0; pass<10; pass++) {
-        let moved = false;
-        for(const o of others) {
-          const overlapX = Math.min(rx+b.length, o.x+o.length) - Math.max(rx, o.x);
-          const overlapY = Math.min(ry+b.width, o.y+o.width) - Math.max(ry, o.y);
-          if(overlapX <= 0 || overlapY <= 0) continue;
-          // Push along axis with smallest penetration
-          if(overlapX < overlapY) {
-            rx += rx+b.length/2 < o.x+o.length/2 ? -overlapX : overlapX;
-          } else {
-            ry += ry+b.width/2 < o.y+o.width/2 ? -overlapY : overlapY;
-          }
-          rx = Math.max(0, Math.min(cnt.innerLength - b.length, rx));
-          ry = Math.max(0, Math.min(cnt.innerWidth - b.width, ry));
-          moved = true;
-        }
-        if(!moved) break;
-      }
-      return { x: rx, y: ry };
-    };
-
     const onUp = () => {
       if(isDraggingBox && dragBoxId) {
-        if(dragIsStack) {
-          const newZ = calcStackZ(dragBoxId, dragNewX, dragNewY);
-          stateRef.current.onPlaceBox?.(dragBoxId, dragNewX, dragNewY, newZ);
-        } else {
-          const free = findFreePos(dragBoxId, dragNewX, dragNewY);
-          stateRef.current.onMoveBox?.(dragBoxId, free.x, free.y);
-        }
+        stateRef.current.onMoveBox?.(dragBoxId, dragNewX, dragNewY);
       }
-      isDraggingBox = false; dragBoxId = null; dragIsStack = false; isOrbit = false;
+      isDraggingBox = false; dragBoxId = null; isOrbit = false;
       renderer.domElement.style.cursor = "grab";
     };
 
@@ -1422,8 +1376,19 @@ function BoxScene({ container, boxes, selectedId, onMoveBox, onSelectBox, onPlac
       tick.userData.dynamic=true; scene.add(tick);
     }
 
+    // 3D collision detection
+    const colliding3D = new Set();
+    for(let i=0;i<boxes.length;i++) for(let j=i+1;j<boxes.length;j++) {
+      const a=boxes[i],b2=boxes[j];
+      if(a.x<b2.x+b2.length&&a.x+a.length>b2.x&&a.y<b2.y+b2.width&&a.y+a.width>b2.y&&a.z<b2.z+b2.height&&a.z+a.height>b2.z){
+        colliding3D.add(a.id);colliding3D.add(b2.id);
+      }
+    }
+
     boxes.forEach(b => {
-      const color = new THREE.Color(b.color); const isSel = b.id === selectedId;
+      const isColliding = colliding3D.has(b.id);
+      const color = isColliding ? new THREE.Color(0x888888) : new THREE.Color(b.color);
+      const isSel = b.id === selectedId;
       const geo = new THREE.BoxGeometry(b.length,b.height,b.width);
       const mesh = new THREE.Mesh(geo, new THREE.MeshPhongMaterial({color,specular:0x222222,shininess:40,transparent:true,opacity:isSel?1:0.88}));
       mesh.position.set(b.x+b.length/2, b.z+b.height/2, b.y-container.innerWidth/2+b.width/2);
@@ -1447,7 +1412,7 @@ function BoxScene({ container, boxes, selectedId, onMoveBox, onSelectBox, onPlac
     <div style={{position:"relative",width:"100%",height:"100%"}}>
       <div ref={mountRef} style={{width:"100%",height:"100%"}}/>
       <div style={{position:"absolute",bottom:10,left:10,fontSize:10,color:"#6677aa",pointerEvents:"none",background:"rgba(0,0,0,0.4)",padding:"4px 9px",borderRadius:4,lineHeight:1.7}}>
-        🖱 Drag = หมุน &nbsp;|&nbsp; Ctrl+Drag = เลื่อน &nbsp;|&nbsp; Scroll = ซูม &nbsp;|&nbsp; ↑↓←→ = เลื่อนมุมมอง &nbsp;|&nbsp; ลากกล่อง = จัดพื้น &nbsp;|&nbsp; Shift+ลากกล่อง = ซ้อนทับ
+        🖱 Drag = หมุน &nbsp;|&nbsp; Ctrl+Drag = เลื่อน &nbsp;|&nbsp; Shift+Drag = บนล่าง &nbsp;|&nbsp; Scroll = ซูม &nbsp;|&nbsp; ↑↓←→ = เลื่อน &nbsp;|&nbsp; ลากกล่อง = จัดตำแหน่ง &nbsp;|&nbsp; ⬜ = ชนกัน
       </div>
     </div>
   );
