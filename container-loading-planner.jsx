@@ -1828,37 +1828,56 @@ export default function App() {
     const sorted = [...bxs].sort((a,b) => b.length*b.width - a.length*a.width);
     const placed = [];
 
-    // Phase 1: shelf pack on Z=0
-    let cx=0, cy=0, rowH=0;
-    const overflow = [];
-    for(const b of sorted) {
-      if(cx+b.length > cnt.innerLength){ cx=0; cy+=rowH; rowH=0; }
-      if(cy+b.width <= cnt.innerWidth) {
-        placed.push({...b, x:cx, y:cy, z:0});
-        cx+=b.length; rowH=Math.max(rowH, b.width);
-      } else {
-        overflow.push(b);
+    const collides = (bx,by,bz,bl,bw,bh) => placed.some(p => {
+      const ox=Math.min(bx+bl,p.x+p.length)-Math.max(bx,p.x);
+      const oy=Math.min(by+bw,p.y+p.width)-Math.max(by,p.y);
+      const oz=Math.min(bz+bh,p.z+p.height)-Math.max(bz,p.z);
+      return ox>1&&oy>1&&oz>1;
+    });
+
+    const hasSupport = (bx,by,bl,bw,z) =>
+      z<1 || placed.some(p =>
+        Math.abs(p.z+p.height-z)<2 &&
+        bx<p.x+p.length && bx+bl>p.x && by<p.y+p.width && by+bw>p.y
+      );
+
+    // Shelf-pack a list of boxes at a given Z level; returns unplaced items
+    const shelfAtZ = (boxes, z) => {
+      const rem = [];
+      let cx=0, cy=0, rowH=0;
+      for(const b of boxes) {
+        if(cx+b.length > cnt.innerLength){ cx=0; cy+=rowH; rowH=0; }
+        if(cy+b.width <= cnt.innerWidth &&
+           z+b.height <= cnt.innerHeight &&
+           hasSupport(cx,cy,b.length,b.width,z) &&
+           !collides(cx,cy,z,b.length,b.width,b.height)) {
+          placed.push({...b, x:cx, y:cy, z});
+          cx+=b.length; rowH=Math.max(rowH,b.width);
+        } else {
+          rem.push(b);
+        }
       }
+      return rem;
+    };
+
+    // Phase 1: floor Z=0
+    let remaining = shelfAtZ(sorted, 0);
+
+    // Phase 2+: keep trying higher Z levels until nothing more fits
+    for(let iter=0; iter<8 && remaining.length>0; iter++) {
+      const zLevels = [...new Set(placed.map(p=>p.z+p.height))]
+        .filter(z=>z+1<cnt.innerHeight).sort((a,b)=>a-b);
+      if(!zLevels.length) break;
+      const before = remaining.length;
+      for(const z of zLevels) {
+        if(!remaining.length) break;
+        remaining = shelfAtZ(remaining, z);
+      }
+      if(remaining.length===before) break; // no progress — stop
     }
 
-    // Phase 2: stack overflow on top of placed boxes (try each placed box as support)
-    for(const b of overflow) {
-      let best = null;
-      for(const sup of placed) {
-        const tx=sup.x, ty=sup.y, tz=sup.z+sup.height;
-        if(tx+b.length>cnt.innerLength || ty+b.width>cnt.innerWidth) continue;
-        if(tz+b.height>cnt.innerHeight) continue;
-        // check no 3D collision with already placed
-        const clash = placed.some(p=>{
-          const ox=Math.min(tx+b.length,p.x+p.length)-Math.max(tx,p.x);
-          const oy=Math.min(ty+b.width,p.y+p.width)-Math.max(ty,p.y);
-          const oz=Math.min(tz+b.height,p.z+p.height)-Math.max(tz,p.z);
-          return ox>1&&oy>1&&oz>1;
-        });
-        if(!clash && (!best || tz<best.tz)) best={tx,ty,tz};
-      }
-      placed.push(best ? {...b,x:best.tx,y:best.ty,z:best.tz} : {...b});
-    }
+    // Anything that couldn't fit stays outside container
+    remaining.forEach(b => placed.push({...b}));
     return placed;
   };
 
