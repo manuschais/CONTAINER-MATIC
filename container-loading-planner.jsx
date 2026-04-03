@@ -1835,49 +1835,76 @@ export default function App() {
       return ox>1&&oy>1&&oz>1;
     });
 
-    const hasSupport = (bx,by,bl,bw,z) =>
-      z<1 || placed.some(p =>
-        Math.abs(p.z+p.height-z)<2 &&
-        bx<p.x+p.length && bx+bl>p.x && by<p.y+p.width && by+bw>p.y
-      );
-
-    // Shelf-pack a list of boxes at a given Z level; returns unplaced items
-    const shelfAtZ = (boxes, z) => {
-      const rem = [];
-      let cx=0, cy=0, rowH=0;
-      for(const b of boxes) {
-        if(cx+b.length > cnt.innerLength){ cx=0; cy+=rowH; rowH=0; }
-        if(cy+b.width <= cnt.innerWidth &&
-           z+b.height <= cnt.innerHeight &&
-           hasSupport(cx,cy,b.length,b.width,z) &&
-           !collides(cx,cy,z,b.length,b.width,b.height)) {
-          placed.push({...b, x:cx, y:cy, z});
-          cx+=b.length; rowH=Math.max(rowH,b.width);
-        } else {
-          rem.push(b);
+    // Full-base support: sum of overlapping area from support boxes must cover ≥99% of box base
+    const hasFullSupport = (bx,by,bl,bw,z) => {
+      if(z<1) return true;
+      let covered=0;
+      placed.forEach(p=>{
+        if(Math.abs(p.z+p.height-z)<2){
+          const ox=Math.min(bx+bl,p.x+p.length)-Math.max(bx,p.x);
+          const oy=Math.min(by+bw,p.y+p.width)-Math.max(by,p.y);
+          if(ox>0&&oy>0) covered+=ox*oy;
         }
+      });
+      return covered>=bl*bw*0.99;
+    };
+
+    // Phase 1: shelf pack on floor Z=0 (no support check needed)
+    const shelfFloor = (boxes) => {
+      const rem=[];
+      let cx=0,cy=0,rowH=0;
+      for(const b of boxes){
+        if(cx+b.length>cnt.innerLength){cx=0;cy+=rowH;rowH=0;}
+        if(cy+b.width<=cnt.innerWidth && b.height<=cnt.innerHeight){
+          placed.push({...b,x:cx,y:cy,z:0});
+          cx+=b.length; rowH=Math.max(rowH,b.width);
+        } else { rem.push(b); }
       }
       return rem;
     };
 
-    // Phase 1: floor Z=0
-    let remaining = shelfAtZ(sorted, 0);
+    // Phase 2+: extreme-point scanning — tries every corner position on the support surface
+    // Fills gaps in all directions, requires full base support
+    const placeAtZ = (boxes, z) => {
+      const rem=[];
+      for(const b of boxes){
+        // Rebuild candidate corners from current placed set (regenerate after each placement)
+        const xs=new Set([0]); const ys=new Set([0]);
+        placed.forEach(p=>{
+          if(Math.abs(p.z+p.height-z)<2){
+            xs.add(p.x); xs.add(p.x+p.length);
+            ys.add(p.y); ys.add(p.y+p.width);
+          }
+        });
+        const candidates=[...[...xs].sort((a,b)=>a-b).flatMap(x=>
+          [...ys].sort((a,b)=>a-b).map(y=>({x,y}))
+        )];
+        let found=false;
+        for(const {x,y} of candidates){
+          if(x+b.length<=cnt.innerLength && y+b.width<=cnt.innerWidth &&
+             z+b.height<=cnt.innerHeight &&
+             hasFullSupport(x,y,b.length,b.width,z) &&
+             !collides(x,y,z,b.length,b.width,b.height)){
+            placed.push({...b,x,y,z}); found=true; break;
+          }
+        }
+        if(!found) rem.push(b);
+      }
+      return rem;
+    };
 
-    // Phase 2+: keep trying higher Z levels until nothing more fits
-    for(let iter=0; iter<8 && remaining.length>0; iter++) {
-      const zLevels = [...new Set(placed.map(p=>p.z+p.height))]
+    let remaining=shelfFloor(sorted);
+
+    for(let iter=0; iter<8&&remaining.length>0; iter++){
+      const zLevels=[...new Set(placed.map(p=>p.z+p.height))]
         .filter(z=>z+1<cnt.innerHeight).sort((a,b)=>a-b);
       if(!zLevels.length) break;
-      const before = remaining.length;
-      for(const z of zLevels) {
-        if(!remaining.length) break;
-        remaining = shelfAtZ(remaining, z);
-      }
-      if(remaining.length===before) break; // no progress — stop
+      const before=remaining.length;
+      for(const z of zLevels){ if(!remaining.length) break; remaining=placeAtZ(remaining,z); }
+      if(remaining.length===before) break;
     }
 
-    // Anything that couldn't fit stays outside container
-    remaining.forEach(b => placed.push({...b}));
+    remaining.forEach(b=>placed.push({...b}));
     return placed;
   };
 
