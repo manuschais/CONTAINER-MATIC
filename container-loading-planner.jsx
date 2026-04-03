@@ -1490,7 +1490,7 @@ function BoxScene({ container, boxes, selectedId, onMoveBox, onSelectBox, onPlac
 // LOADING REPORT MODAL
 // ============================================================
 function BoxReportModal({ boxes, container, projectName, onClose }) {
-  const canvasRef = useRef(null);
+  const floorCanvasRefs = useRef({});
 
   const sorted = useMemo(() => {
     const fl = [...boxes].filter(b => b.x >= -50).sort((a, b) =>
@@ -1500,49 +1500,49 @@ function BoxReportModal({ boxes, container, projectName, onClose }) {
     return fl.map(b => ({ ...b, floor: b.z < 100 ? 1 : b.z < f1MaxH * 1.2 ? 2 : 3 }));
   }, [boxes]);
 
-  useEffect(() => {
-    const canvas = canvasRef.current;
-    if (!canvas || !sorted.length) return;
+  const floors = useMemo(() => [...new Set(sorted.map(b => b.floor))].sort(), [sorted]);
+
+  const drawFloor = useCallback((canvas, floorNum) => {
+    if (!canvas) return;
     const CW = canvas.width, CH = canvas.height;
     const ctx = canvas.getContext("2d");
     const PAD = 32;
-    const scale = Math.min((CW - PAD * 2) / container.innerLength, (CH - PAD * 2 - 24) / container.innerWidth);
+    const scale = Math.min((CW - PAD * 2) / container.innerLength, (CH - PAD * 2 - 20) / container.innerWidth);
     const ox = PAD, oy = PAD;
     const cw = container.innerLength * scale, ch2 = container.innerWidth * scale;
     ctx.clearRect(0, 0, CW, CH);
     ctx.fillStyle = "#f5f7fa"; ctx.fillRect(0, 0, CW, CH);
     ctx.fillStyle = "#dde4ee"; ctx.fillRect(ox, oy, cw, ch2);
     ctx.strokeStyle = "#445"; ctx.lineWidth = 2; ctx.strokeRect(ox, oy, cw, ch2);
-    // door
     ctx.fillStyle = "#44bb77"; ctx.fillRect(ox + cw - 3, oy, 6, ch2);
-    ctx.font = "10px sans-serif"; ctx.fillStyle = "#445"; ctx.textAlign = "center";
-    ctx.fillText("ใน", ox + 20, oy - 8);
-    ctx.fillText("ประตู ▶", ox + cw, oy - 8);
-    const fc = ["#4488ff","#ff8833","#ff4455"];
+    ctx.font = "10px sans-serif"; ctx.fillStyle = "#556"; ctx.textAlign = "left";  ctx.textBaseline = "alphabetic";
+    ctx.fillText("ใน", ox + 2, oy - 6);
+    ctx.textAlign = "right";
+    ctx.fillText("ประตู ▶", ox + cw, oy - 6);
     sorted.forEach((b, i) => {
+      if (b.floor !== floorNum) return;
       const bx = ox + b.x * scale, by = oy + b.y * scale;
       const bw = b.length * scale, bh = b.width * scale;
-      ctx.fillStyle = fc[b.floor - 1] + "99";
+      ctx.fillStyle = b.color + "bb";
       ctx.fillRect(bx, by, bw, bh);
-      ctx.strokeStyle = fc[b.floor - 1]; ctx.lineWidth = 1; ctx.strokeRect(bx, by, bw, bh);
-      const fs = Math.max(7, Math.min(11, Math.min(bw, bh) * 0.55));
+      ctx.strokeStyle = b.color; ctx.lineWidth = 1.5; ctx.strokeRect(bx, by, bw, bh);
+      const fs = Math.max(7, Math.min(12, Math.min(bw, bh) * 0.55));
       ctx.fillStyle = "#111"; ctx.font = `bold ${fs}px sans-serif`;
       ctx.textAlign = "center"; ctx.textBaseline = "middle";
       ctx.fillText(String(i + 1), bx + bw / 2, by + bh / 2);
     });
-    ["ชั้น 1","ชั้น 2","ชั้น 3"].forEach((lbl, i) => {
-      const lx = ox + i * 72;
-      ctx.fillStyle = fc[i] + "99"; ctx.fillRect(lx, oy + ch2 + 8, 12, 12);
-      ctx.strokeStyle = fc[i]; ctx.lineWidth = 1; ctx.strokeRect(lx, oy + ch2 + 8, 12, 12);
-      ctx.fillStyle = "#445"; ctx.font = "10px sans-serif"; ctx.textAlign = "left"; ctx.textBaseline = "top";
-      ctx.fillText(lbl, lx + 15, oy + ch2 + 9);
-    });
   }, [sorted, container]);
 
+  useEffect(() => {
+    floors.forEach(f => drawFloor(floorCanvasRefs.current[f], f));
+  }, [floors, drawFloor]);
+
   const printReport = () => {
-    const canvas = canvasRef.current;
-    const imgUrl = canvas ? canvas.toDataURL() : "";
     const fc = ["#4488ff","#ff8833","#ff4455"];
+    const layoutImgs = floors.map(f => {
+      const c = floorCanvasRefs.current[f];
+      return c ? `<div class="floor-hdr">Layout ชั้น ${f}</div><img src="${c.toDataURL()}"/>` : "";
+    }).join("");
     const rows = sorted.map((b, i) => `
       <tr style="background:${i%2?"#f9f9f9":"#fff"}">
         <td style="text-align:center;font-weight:700;color:#224">${i+1}</td>
@@ -1559,14 +1559,15 @@ function BoxReportModal({ boxes, container, projectName, onClose }) {
       <title>Loading Report — ${projectName}</title>
       <style>*{margin:0;padding:0;box-sizing:border-box}body{font-family:sans-serif;padding:20px;color:#222}
       h2{font-size:16px;margin-bottom:4px}.sub{font-size:11px;color:#666;margin-bottom:12px}
-      img{max-width:100%;border:1px solid #ccc;border-radius:4px;margin-bottom:14px}
-      table{width:100%;border-collapse:collapse;font-size:12px}
+      .floor-hdr{font-size:12px;font-weight:700;color:#2a3a5a;margin:12px 0 4px;padding:3px 0;border-bottom:2px solid #2a3a5a}
+      img{max-width:100%;border:1px solid #ccc;border-radius:4px;margin-bottom:4px}
+      table{width:100%;border-collapse:collapse;font-size:12px;margin-top:14px}
       th{background:#2a3a5a;color:#fff;padding:5px 8px;text-align:left}
       td{padding:4px 8px;border-bottom:1px solid #eee}
       @media print{body{padding:10px}}</style></head><body>
       <h2>📦 Loading Report — ${projectName}</h2>
       <div class="sub">${container.name} | ${container.innerLength}×${container.innerWidth}×${container.innerHeight} mm | ${new Date().toLocaleDateString("th-TH")} | รวม ${sorted.length} รายการ (เรียงจากในสุด → ประตู)</div>
-      <img src="${imgUrl}"/>
+      ${layoutImgs}
       <table><thead><tr>
         <th style="width:36px">ที่</th><th>ชื่อสินค้า</th><th>L×W×H (mm)</th>
         <th>X</th><th>Y</th><th>Z พื้น</th><th style="width:50px">ชั้น</th><th>น้ำหนัก kg</th>
@@ -1577,6 +1578,7 @@ function BoxReportModal({ boxes, container, projectName, onClose }) {
   };
 
   const fc = ["#4488ff","#ff8833","#ff4455"];
+  const floorNames = ["ชั้น 1 (พื้น)","ชั้น 2","ชั้น 3"];
   return (
     <div style={{position:"fixed",inset:0,background:"rgba(0,0,0,0.75)",zIndex:1000,display:"flex",alignItems:"center",justifyContent:"center"}} onClick={onClose}>
       <div style={{background:"#1a2235",borderRadius:10,border:"1px solid #3a4a66",width:"min(94vw,800px)",maxHeight:"90vh",overflow:"auto",padding:0}} onClick={e=>e.stopPropagation()}>
@@ -1588,9 +1590,14 @@ function BoxReportModal({ boxes, container, projectName, onClose }) {
           </div>
         </div>
         <div style={{padding:"12px 16px"}}>
-          <div style={{fontSize:10,color:"#7a8aaa",marginBottom:8}}>{container.name} | {container.innerLength}×{container.innerWidth}×{container.innerHeight} mm | รวม {sorted.length} รายการ — เรียงจากในสุด → ประตู</div>
-          <canvas ref={canvasRef} width={740} height={220} style={{width:"100%",borderRadius:6,border:"1px solid #2e3a52",display:"block",marginBottom:12}}/>
-          <table style={{width:"100%",borderCollapse:"collapse",fontSize:11}}>
+          <div style={{fontSize:10,color:"#7a8aaa",marginBottom:10}}>{container.name} | {container.innerLength}×{container.innerWidth}×{container.innerHeight} mm | รวม {sorted.length} รายการ — เรียงจากในสุด → ประตู</div>
+          {floors.map(f => (
+            <div key={f} style={{marginBottom:12}}>
+              <div style={{fontSize:11,fontWeight:700,color:fc[f-1],marginBottom:4,paddingBottom:3,borderBottom:`1px solid ${fc[f-1]}44`}}>{floorNames[f-1]} — {sorted.filter(b=>b.floor===f).length} รายการ</div>
+              <canvas ref={el=>{floorCanvasRefs.current[f]=el; drawFloor(el,f);}} width={740} height={200} style={{width:"100%",borderRadius:6,border:`1px solid ${fc[f-1]}55`,display:"block"}}/>
+            </div>
+          ))}
+          <table style={{width:"100%",borderCollapse:"collapse",fontSize:11,marginTop:4}}>
             <thead>
               <tr style={{background:"#0d1628"}}>
                 {["ที่","ชื่อสินค้า","L×W×H mm","X","Y","Z พื้น","ชั้น","น้ำหนัก kg"].map(h=>(
