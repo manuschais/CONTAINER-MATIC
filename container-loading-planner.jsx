@@ -1501,16 +1501,20 @@ function BoxScene({ container, boxes, selectedId, onMoveBox, onSelectBox, onPlac
 // ============================================================
 // LOADING REPORT MODAL
 // ============================================================
-function BoxReportModal({ boxes, container, projectName, onClose }) {
+function BoxReportModal({ boxes, container, projectName, contInsts, onClose }) {
   const floorCanvasRefs = useRef({});
+  const [reportCIdx, setReportCIdx] = useState(0);
+
+  const contList = contInsts && contInsts.length > 0 ? contInsts : [{name:'ตู้ที่ 1'}];
+  const contBoxes = useMemo(() => boxes.filter(b=>(b.cIdx||0)===reportCIdx), [boxes, reportCIdx]);
 
   const sorted = useMemo(() => {
-    const fl = [...boxes].filter(b => b.x >= -50).sort((a, b) =>
+    const fl = [...contBoxes].filter(b => b.x >= -50).sort((a, b) =>
       a.x !== b.x ? a.x - b.x : a.z !== b.z ? a.z - b.z : a.y - b.y
     );
     const f1MaxH = Math.max(...fl.filter(b => b.z < 100).map(b => b.height), 800);
     return fl.map(b => ({ ...b, floor: b.z < 100 ? 1 : b.z < f1MaxH * 1.2 ? 2 : 3 }));
-  }, [boxes]);
+  }, [contBoxes]);
 
   const floors = useMemo(() => [...new Set(sorted.map(b => b.floor))].sort(), [sorted]);
 
@@ -1602,7 +1606,18 @@ function BoxReportModal({ boxes, container, projectName, onClose }) {
           </div>
         </div>
         <div style={{padding:"12px 16px"}}>
-          <div style={{fontSize:10,color:"#7a8aaa",marginBottom:10}}>{container.name} | {container.innerLength}×{container.innerWidth}×{container.innerHeight} mm | รวม {sorted.length} รายการ — เรียงจากในสุด → ประตู</div>
+          {contList.length > 1 && (
+            <div style={{display:"flex",gap:4,marginBottom:8,flexWrap:"wrap"}}>
+              {contList.map((ci,idx)=>(
+                <button key={idx}
+                  style={{padding:"3px 10px",borderRadius:5,border:`1px solid ${idx===reportCIdx?"#00ddaa":"#3a4a66"}`,background:idx===reportCIdx?"#00ddaa22":"#263048",color:idx===reportCIdx?"#00ddaa":"#aaa",cursor:"pointer",fontSize:11,fontWeight:idx===reportCIdx?700:400}}
+                  onClick={()=>setReportCIdx(idx)}>
+                  {ci.name} ({boxes.filter(b=>(b.cIdx||0)===idx).length})
+                </button>
+              ))}
+            </div>
+          )}
+          <div style={{fontSize:10,color:"#7a8aaa",marginBottom:10}}>{contList[reportCIdx]?.name||''} | {container.name} | {container.innerLength}×{container.innerWidth}×{container.innerHeight} mm | รวม {sorted.length} รายการ — เรียงจากในสุด → ประตู</div>
           {floors.map(f => (
             <div key={f} style={{marginBottom:12}}>
               <div style={{fontSize:11,fontWeight:700,color:fc[f-1],marginBottom:4,paddingBottom:3,borderBottom:`1px solid ${fc[f-1]}44`}}>{floorNames[f-1]} — {sorted.filter(b=>b.floor===f).length} รายการ</div>
@@ -1668,13 +1683,15 @@ export default function App() {
   const [spawnZ, setSpawnZ] = useState(0);
   const [projectName, setProjectName] = useState("My Project");
   const [showReport, setShowReport] = useState(false);
+  const [contInsts, setContInsts] = useState([{name:'ตู้ที่ 1'}]);
+  const [activeCont, setActiveCont] = useState(0);
   const vehiclesRef = useRef([]);
   vehiclesRef.current = vehicles;
   const sideElevRef = useRef(null);
   const importFileRef = useRef(null);
 
   const exportProject = () => {
-    const data = { projectName, container, vehicles, boxes };
+    const data = { projectName, container, vehicles, boxes, contInsts };
     const blob = new Blob([JSON.stringify(data, null, 2)], { type: "application/json" });
     const a = document.createElement("a");
     a.href = URL.createObjectURL(blob);
@@ -1692,6 +1709,7 @@ export default function App() {
         if (data.vehicles) { setVehicles(data.vehicles); setSelectedId(null); }
         if (data.boxes) { setBoxes(data.boxes); setSelectedBoxId(null); }
         if (data.projectName) setProjectName(data.projectName);
+        if (data.contInsts) { setContInsts(data.contInsts); setActiveCont(0); }
       } catch { alert("ไฟล์ไม่ถูกต้อง"); }
     };
     reader.readAsText(file);
@@ -1799,21 +1817,23 @@ export default function App() {
     return () => window.removeEventListener("keydown", onKey);
   }, [undo, redo]);
 
+  const activeBoxes = useMemo(()=>boxes.filter(b=>(b.cIdx||0)===activeCont),[boxes,activeCont]);
+
   const boxCollisions = useMemo(() => {
     const c = new Set();
-    for (let i = 0; i < boxes.length; i++) for (let j = i+1; j < boxes.length; j++) {
-      const a=boxes[i],b=boxes[j];
+    for (let i = 0; i < activeBoxes.length; i++) for (let j = i+1; j < activeBoxes.length; j++) {
+      const a=activeBoxes[i],b=activeBoxes[j];
       if(a.x<b.x+b.length&&a.x+a.length>b.x&&a.y<b.y+b.width&&a.y+a.width>b.y){c.add(a.id);c.add(b.id);}
     }
-    boxes.forEach((b)=>{ if(b.x<0||b.y<0||b.x+b.length>container.innerLength||b.y+b.width>container.innerWidth)c.add(b.id); });
+    activeBoxes.forEach((b)=>{ if(b.x<0||b.y<0||b.x+b.length>container.innerLength||b.y+b.width>container.innerWidth)c.add(b.id); });
     return c;
-  }, [boxes, container]);
+  }, [activeBoxes, container]);
 
   const totalBoxWeight = boxes.reduce((s,b)=>s+b.weight,0);
   const containerVol = container.innerLength * container.innerWidth * container.innerHeight;
-  const usedVol = boxes.reduce((s,b)=>s+b.length*b.width*b.height,0);
+  const usedVol = activeBoxes.reduce((s,b)=>s+b.length*b.width*b.height,0);
   const volPct = Math.round(usedVol/containerVol*100);
-  const boxesInContainer = boxes.filter(b=>b.x>=0&&b.x+b.length<=container.innerLength&&b.y>=0&&b.y+b.width<=container.innerWidth).length;
+  const boxesInContainer = activeBoxes.filter(b=>b.x>=0&&b.x+b.length<=container.innerLength&&b.y>=0&&b.y+b.width<=container.innerWidth).length;
 
   const addBox = () => {
     const p = BOX_PRESETS.find(t=>t.id===addBoxPreset);
@@ -1827,7 +1847,7 @@ export default function App() {
       length: isCust?customBox.length:p.length, width: bw,
       height: isCust?customBox.height:p.height, weight: isCust?customBox.weight:p.weight,
       x: spawnX, y: Math.max(0, Math.min(container.innerWidth - bw, spawnY)),
-      z: Math.max(0, spawnZ), color: COLORS[boxes.length%COLORS.length],
+      z: Math.max(0, spawnZ), color: COLORS[boxes.length%COLORS.length], cIdx: activeCont,
     };
     setBoxes(prev=>[...prev,nb]); setSelectedBoxId(nb.id); setShowAddBox(false);
   };
@@ -1920,7 +1940,35 @@ export default function App() {
     return placed;
   };
 
-  const autoArrangeBoxes = () => { saveHistory(); setBoxes(bxs=>packBoxes3D(bxs, container)); };
+  const autoArrangeBoxes = () => {
+    saveHistory();
+    setBoxes(bxs => {
+      const mine = bxs.filter(b=>(b.cIdx||0)===activeCont);
+      const others = bxs.filter(b=>(b.cIdx||0)!==activeCont);
+      return [...others, ...packBoxes3D(mine, container)];
+    });
+  };
+
+  const autoPackMulti = () => {
+    saveHistory();
+    const sorted = [...boxes].sort((a,b)=>b.length*b.width-a.length*a.width)
+                             .map(b=>({...b,x:spawnX,y:spawnY,z:spawnZ}));
+    const result = []; const newInsts = [];
+    let remaining = sorted; let ci = 0;
+    while(remaining.length>0 && ci<10) {
+      newInsts.push({name:`ตู้ที่ ${ci+1}`});
+      const packed = packBoxes3D(remaining, container);
+      const fits = packed.filter(b=>b.x>=0&&b.x+b.length<=container.innerLength&&b.y>=0&&b.y+b.width<=container.innerWidth);
+      const overflow = packed.filter(b=>!(b.x>=0&&b.x+b.length<=container.innerLength&&b.y>=0&&b.y+b.width<=container.innerWidth));
+      fits.forEach(b=>result.push({...b,cIdx:ci}));
+      if(!overflow.length || overflow.length===remaining.length){ overflow.forEach(b=>result.push({...b,cIdx:ci})); break; }
+      remaining = overflow.map(b=>({...b,x:spawnX,y:spawnY,z:spawnZ}));
+      ci++;
+    }
+    setContInsts(newInsts.length>0?newInsts:[{name:'ตู้ที่ 1'}]);
+    setActiveCont(0);
+    setBoxes(result);
+  };
 
   const importBoxCSV = (file) => {
     const reader = new FileReader();
@@ -1940,7 +1988,7 @@ export default function App() {
         if(len>0 && wid>0 && hgt>0) newBoxes.push({
           id:generateId(), preset:name, name, length:len, width:wid, height:hgt, weight:wgt,
           x:spawnX, y:spawnY, z:spawnZ+newBoxes.reduce((s,b)=>s+b.height,0),
-          color:COLORS[(boxes.length+newBoxes.length)%COLORS.length],
+          color:COLORS[(boxes.length+newBoxes.length)%COLORS.length], cIdx: activeCont,
         });
       });
       if(!newBoxes.length){ alert("ไม่พบข้อมูล — format: ชื่อ,ยาว,กว้าง,สูง[,น้ำหนัก]"); return; }
@@ -2152,22 +2200,36 @@ export default function App() {
           </div>
           ) : (
           <div style={{ ...S.sec, flex: 1, overflow: "auto" }}>
-            <div style={{ display:"flex", justifyContent:"space-between", alignItems:"center", marginBottom:4 }}>
+            <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:4}}>
               <div style={S.lbl}>📦 สินค้า ({boxes.length}) • {totalBoxWeight.toLocaleString()} kg</div>
               <button style={{...S.btn,...S.btnP,padding:"3px 8px"}} onClick={()=>setShowAddBox(!showAddBox)}>+ เพิ่ม</button>
             </div>
+            {/* Container selector tabs */}
+            <div style={{display:"flex",gap:3,marginBottom:5,flexWrap:"wrap",alignItems:"center"}}>
+              {contInsts.map((ci,idx)=>(
+                <button key={idx} style={{...S.btn,...(idx===activeCont?S.btnA:{}),padding:"2px 8px",fontSize:10,position:"relative"}}
+                  onClick={()=>setActiveCont(idx)}>
+                  {ci.name} <span style={{color:"#aaa",fontWeight:400}}>({boxes.filter(b=>(b.cIdx||0)===idx).length})</span>
+                </button>
+              ))}
+              <button style={{...S.btn,padding:"2px 7px",fontSize:10,color:"#00ffaa"}}
+                onClick={()=>setContInsts(p=>[...p,{name:`ตู้ที่ ${p.length+1}`}])}>+ ตู้</button>
+            </div>
             <div style={{fontSize:10,color:"#7a8aaa",marginBottom:5,display:"flex",justifyContent:"space-between"}}>
-              <span>ในตู้: {boxesInContainer}/{boxes.length} ชิ้น</span>
+              <span>ในตู้: {boxesInContainer}/{activeBoxes.length} ชิ้น</span>
               <span style={{color:volPct>100?"#ff5555":volPct>80?"#F59E0B":"#00ddaa"}}>Vol: {volPct}%</span>
             </div>
             <div style={S.bar}><div style={S.fill(Math.min(volPct,100), volPct>100?"#ff5555":volPct>80?"#F59E0B":"#00ddaa")}/></div>
-            <div style={{display:"flex",gap:4,marginBottom:6}}>
+            <div style={{display:"flex",gap:4,marginBottom:4,flexWrap:"wrap"}}>
               <label style={{...S.btn,flex:1,textAlign:"center",cursor:"pointer",fontSize:10,padding:"3px 0"}}>
                 📂 Import CSV
                 <input ref={importBoxRef} type="file" accept=".csv,.txt,.tsv" style={{display:"none"}}
                   onChange={e=>{if(e.target.files[0]){importBoxCSV(e.target.files[0]);e.target.value="";}}}/>
               </label>
-              <button style={{...S.btn,flex:1,fontSize:10,padding:"3px 0"}} onClick={autoArrangeBoxes} disabled={!boxes.length}>⚡ Auto Pack</button>
+              <button style={{...S.btn,flex:1,fontSize:10,padding:"3px 0"}} onClick={autoArrangeBoxes} disabled={!activeBoxes.length}>⚡ Pack ตู้นี้</button>
+            </div>
+            <div style={{display:"flex",gap:4,marginBottom:6}}>
+              <button style={{...S.btn,flex:1,fontSize:10,padding:"3px 0",...(boxes.length?S.btnP:{})}} onClick={autoPackMulti} disabled={!boxes.length}>🗄 จัดทุกตู้ Auto</button>
               <button style={{...S.btn,flex:1,fontSize:10,padding:"3px 0"}} onClick={()=>setShowReport(true)} disabled={!boxes.length}>📋 รายงาน</button>
             </div>
             {showAddBox && (
@@ -2202,7 +2264,7 @@ export default function App() {
                 <button style={{...S.btn,...S.btnP,width:"100%",marginTop:7}} onClick={addBox}>✓ เพิ่มสินค้า</button>
               </div>
             )}
-            {boxes.map(b=>(
+            {activeBoxes.map(b=>(
               <div key={b.id} style={S.card(b.id===selectedBoxId, boxCollisions.has(b.id))} onClick={()=>setSelectedBoxId(b.id===selectedBoxId?null:b.id)}>
                 <div style={{display:"flex",justifyContent:"space-between",alignItems:"center"}}>
                   <div style={{display:"flex",alignItems:"center",gap:5}}>
@@ -2227,7 +2289,7 @@ export default function App() {
                 )}
               </div>
             ))}
-            {!boxes.length && <div style={{textAlign:"center",color:"#444",padding:16,fontSize:12}}>กด "+ เพิ่ม" เพื่อเพิ่มสินค้า</div>}
+            {!activeBoxes.length && <div style={{textAlign:"center",color:"#444",padding:16,fontSize:12}}>กด "+ เพิ่ม" หรือ Import CSV เพื่อเพิ่มสินค้า</div>}
           </div>
           )}
 
@@ -2245,8 +2307,8 @@ export default function App() {
           </div>
           <div style={S.va}>
             {viewMode==="car" && <SideElevView ref={sideElevRef} container={container} vehicles={vehicles} selectedId={selectedId} onSelectVehicle={setSelectedId} onUpdateVehicle={updateV}/>}
-            {viewMode==="boxtop" && <BoxTopView container={container} boxes={boxes} selectedId={selectedBoxId} onSelectBox={setSelectedBoxId} onMoveBox={moveBox} collisions={boxCollisions}/>}
-            {viewMode==="box3d" && <BoxScene container={container} boxes={boxes} selectedId={selectedBoxId} onMoveBox={moveBox} onSelectBox={setSelectedBoxId} onPlaceBox={placeBox}/>}
+            {viewMode==="boxtop" && <BoxTopView container={container} boxes={activeBoxes} selectedId={selectedBoxId} onSelectBox={setSelectedBoxId} onMoveBox={moveBox} collisions={boxCollisions}/>}
+            {viewMode==="box3d" && <BoxScene container={container} boxes={activeBoxes} selectedId={selectedBoxId} onMoveBox={moveBox} onSelectBox={setSelectedBoxId} onPlaceBox={placeBox}/>}
           </div>
         </div>
       </div>
@@ -2258,7 +2320,7 @@ export default function App() {
           : <span>Boxes: {boxes.length} | {totalBoxWeight.toLocaleString()} kg {totalBoxWeight>container.maxPayload?`⚠️ +${(totalBoxWeight-container.maxPayload).toLocaleString()}kg`:""}</span>
         }
       </div>
-      {showReport && <BoxReportModal boxes={boxes} container={container} projectName={projectName} onClose={()=>setShowReport(false)}/>}
+      {showReport && <BoxReportModal boxes={boxes} container={container} projectName={projectName} contInsts={contInsts} onClose={()=>setShowReport(false)}/>}
     </div>
   );
 }
